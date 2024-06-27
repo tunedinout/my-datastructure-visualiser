@@ -1,8 +1,8 @@
+import { disconnect } from "process";
 import BSTNode from "./BSTNode";
 interface SearchResult<Type> {
   node: BSTNode<Type> | null;
   parent: BSTNode<Type> | null;
-  isLeftChild: Boolean;
 }
 export class BST<Type> {
   // if root is deleted or not defined yet,
@@ -12,8 +12,75 @@ export class BST<Type> {
   constructor(root: BSTNode<Type>) {
     this.root = root;
   }
+  private isLeftChildOfParent(node: BSTNode<Type>, parent: BSTNode<Type>) {
+    return parent.getLeft() === node;
+  }
 
-  private getInorderPredecessor(node: BSTNode<Type>): SearchResult<Type> {
+  // DANGER
+  private deleteRoot(): BSTNode<Type> | null {
+    if (!this.root) return this.root;
+
+    const rootOriginal: BSTNode<Type> = this.root;
+    this.root = null;
+
+    return rootOriginal;
+  }
+
+  private removeLeafNode(
+    node: BSTNode<Type>,
+    parent: BSTNode<Type>,
+  ): BSTNode<Type> {
+    if (parent.getLeft() === node) {
+      parent.setLeft(null);
+    }
+    // doing it this way  makes sure
+    // that even in case of invalid input
+    // this funciton is reliable
+    if (parent.getRight() === node) {
+      parent.setRight(null);
+    }
+    return node;
+  }
+
+  private removeNodeWithOnlyLeftChild(
+    node: BSTNode<Type>,
+    parent: BSTNode<Type>,
+  ): BSTNode<Type> {
+    // needs to finally attach the right child of node
+    const isNodeLeftChild = this.isLeftChildOfParent(node, parent);
+
+    if (isNodeLeftChild) {
+      parent.setLeft(node.getLeft());
+    } else {
+      parent.setRight(node.getLeft());
+    }
+
+    // parent has already derefrenced this node
+    node.setLeft(null);
+    return node;
+  }
+
+  private removeNodeWithOnlyRightChild(
+    node: BSTNode<Type>,
+    parent: BSTNode<Type>,
+  ): BSTNode<Type> {
+    const isNodeLeftChild = this.isLeftChildOfParent(node, parent);
+
+    if (isNodeLeftChild) {
+      parent.setLeft(node.getRight());
+    } else {
+      parent.setRight(node.getRight());
+    }
+
+    // parent has already derefrenced this node
+    node.setRight(null);
+    return node;
+  }
+  /**
+   * return the previous element from the node in the final
+   * inorder traversal
+   */
+  private findInorderPrevElement(node: BSTNode<Type>): SearchResult<Type> {
     // it must have a left child
     // if node has no children remove Node
 
@@ -28,17 +95,51 @@ export class BST<Type> {
         prev = current;
         current = current.right;
       }
-      return { node: current, parent: prev, isLeftChild: false };
+      return { node: current, parent: prev };
     } else {
       // it has no left child
       // hence no inorder predecessor
-      return { node: null, parent: null, isLeftChild: false };
+      return { node: null, parent: null };
     }
+  }
+
+  private replaceNodeWithAnother(
+    node: BSTNode<Type>,
+    parent: BSTNode<Type>,
+    replacementNode: BSTNode<Type>,
+  ): BSTNode<Type> {
+    // assumptions
+    // replacementNode does not have its own subtree
+    // if it does this funciton will replace it
+
+    const leftSubTreeRoot = node.getLeft();
+    const rightSubTreeRoot = node.getRight();
+
+    // derefrence node children
+    node.setRight(null);
+    node.setLeft(null);
+
+    const isNodeLeftChild = this.isLeftChildOfParent(node, parent);
+
+    if (isNodeLeftChild) {
+      parent.setLeft(replacementNode);
+    } else {
+      parent.setRight(replacementNode);
+    }
+
+    // assign respective subTree to the replacement node
+
+    replacementNode.setRight(rightSubTreeRoot);
+    replacementNode.setLeft(leftSubTreeRoot);
+
+    // always return the given node
+    // for chaining
+    return node;
   }
 
   private addNodeHelper(
     node: BSTNode<Type>,
-    parent: BSTNode<Type> | null
+    parent: BSTNode<Type> | null,
   ): void {
     if (!parent) {
       // this is the first node
@@ -70,29 +171,28 @@ export class BST<Type> {
   private searchHelper(
     value: Type,
     parent: BSTNode<Type> | null,
-    grandParent: BSTNode<Type> | null
+    grandParent: BSTNode<Type> | null,
   ): SearchResult<Type> {
     if (!parent) {
-      return { node: null, parent: null, isLeftChild: false };
+      return { node: null, parent: null };
     }
 
     if (parent.value === value) {
       return {
         node: parent,
         parent: grandParent,
-        isLeftChild: grandParent?.left === parent,
       };
     } else {
       const nextNode = value < parent.value ? parent.left : parent.right;
       return nextNode
         ? this.searchHelper(value, nextNode, parent)
-        : { node: null, parent: null, isLeftChild: false };
+        : { node: null, parent: null };
     }
   }
 
   private removeChildFromParent(
     node: BSTNode<Type> | null,
-    parent: BSTNode<Type> | null
+    parent: BSTNode<Type> | null,
   ): BSTNode<Type> | null {
     if (!node || !parent) return null;
     if (node === parent.left) {
@@ -120,79 +220,42 @@ export class BST<Type> {
    * returns the deleted node or null if not found or if the root is removed
    */
   public removeNode(value: Type): BSTNode<Type> | null {
-    const { node, parent, isLeftChild: isNodeLeftChild } = this.searchNode(value);
+    const { node, parent } = this.searchNode(value);
     if (!node) return node;
 
+    //0. if node does not have a parent it is the root node
     if (!parent) {
-      this.root = null;
-      return null;
+      return this.deleteRoot();
     }
 
-    // if no children remove it from the parent
+    //1. if no children remove it from the parent
     if (!node.left && !node.right) {
-      if (parent.left === node) {
-        parent.setLeft(null);
-        return node;
-      } else if (parent.right === node) {
-        parent.setRight(null);
-        return node;
-      } else {
-        // silently fail as node has to be child of parent
-        return null;
-      }
+      return this.removeLeafNode(node, parent);
     }
 
-    // if not left child, then replace this node with its right child
+    //2. if no left child, then replace this node with its right child
     if (!node.left) {
-      // get back this removedNode
-      const child = node.right;
-      if (parent.left === node) {
-        // if left child of parent
-        parent.setLeft(child);
-      } else if (parent.right === node) {
-        parent.setRight(child);
-      } else {
-        // silently fail as node has to child of parent
-        return null;
-      }
+      return this.removeNodeWithOnlyRightChild(node, parent);
     } else {
-      // replace with inorder predecessor
-      const {
-        node: inorderPredecessor,
-        parent: inorderPredecessorParent,
-        isLeftChild: isInorderPredecessorLeftChild
-      }: SearchResult<Type> = this.getInorderPredecessor(node);
+      const { node: inorderPredecessor, parent: inorderPredecessorParent } =
+        this.findInorderPrevElement(node);
 
+      // if inorder pred has any left child that is joined with its parent
+      if (inorderPredecessor?.getLeft() && inorderPredecessorParent)
+        this.removeNodeWithOnlyLeftChild(
+          inorderPredecessor,
+          inorderPredecessorParent,
+        );
+
+      // derefrence any children explicitiy for the inorder predecessor
       if (inorderPredecessor) {
-        // it can have a left child but it must not have a right child
-
-        // disconnect inorder predecssor left child with its parent 
-        // and connect left child to inorderPredecessorParent
-        if (inorderPredecessor.left) {
-           
-            
-            if(isInorderPredecessorLeftChild){
-               inorderPredecessorParent?.setLeft(inorderPredecessor.left);
-               // inorder Predecessor disconnect from it child
-               inorderPredecessor.setLeft(null)
-            }
-            // 
-            if(isNodeLeftChild){
-                inorderPredecessor.left = node.left;
-                
-                parent.setLeft(inorderPredecessor);
-
-            }
-        }else{
-
-        }
-      } else {
-        // silently fail  as it does not have inorderPredecessor
-        console.error("fetching inorder predecessor has failed!!");
-        return null;
+        inorderPredecessor.setLeft(null);
+        inorderPredecessor.setRight(null);
+        // replace inorder predecessor with the node to be remove
+        return this.replaceNodeWithAnother(node, parent, inorderPredecessor);
       }
 
-      // predecessor has no
+      return null;
     }
   }
   /**
